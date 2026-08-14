@@ -152,7 +152,7 @@ full Docker/CI/CD tooling.
 docker compose up --build
 ```
 
-Then open **http://localhost:3000** and sign in with
+Then open **https://<sai857>.netlify.app** and sign in with
 `alice.admin@nexuslabs.io` / `Admin@123` (admin) or
 `carol.dev@nexuslabs.io` / `Carol@123` (employee).
 
