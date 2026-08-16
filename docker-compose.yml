@@ -1,0 +1,178 @@
+name: nexusone
+
+x-backend-env: &backend-env
+  NODE_ENV: production
+  JWT_SECRET: ${JWT_SECRET:-nexusone-dev-secret-change-me}
+  JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+  INTERNAL_SECRET: ${INTERNAL_SECRET:-nexusone-internal-secret}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_USER: ${POSTGRES_USER:-nexusone}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexusone}
+  POSTGRES_DB: ${POSTGRES_DB:-nexusone}
+  MONGO_URI: mongodb://mongo:27017/nexusone
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:3000}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nexusone}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexusone}
+      POSTGRES_DB: ${POSTGRES_DB:-nexusone}
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nexusone']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  mongo:
+    image: mongo:7
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ['CMD-SHELL', 'mongosh --quiet --eval "db.runCommand({ping:1}).ok"']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  auth:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    environment:
+      <<: *backend-env
+      SERVICE: auth
+    ports: ['3001:3001']
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  org:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    environment:
+      <<: *backend-env
+      SERVICE: org
+    ports: ['3002:3002']
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  chat:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    environment:
+      <<: *backend-env
+      SERVICE: chat
+    ports: ['3003:3003'] # Socket.IO (browsers connect directly)
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  projects:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    environment:
+      <<: *backend-env
+      SERVICE: projects
+    ports: ['3004:3004']
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  files:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    environment:
+      <<: *backend-env
+      SERVICE: files
+    ports: ['3005:3005']
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  calendar:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    environment:
+      <<: *backend-env
+      SERVICE: calendar
+    ports: ['3006:3006']
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  notifications:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    environment:
+      <<: *backend-env
+      SERVICE: notifications
+    ports: ['3007:3007']
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  ai:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    environment:
+      <<: *backend-env
+      SERVICE: ai
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+    ports: ['3008:3008']
+
+  gateway:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    environment:
+      <<: *backend-env
+      SERVICE: gateway
+      SERVICE_AUTH_URL: http://auth:3001
+      SERVICE_ORG_URL: http://org:3002
+      SERVICE_CHAT_URL: http://chat:3003
+      SERVICE_PROJECTS_URL: http://projects:3004
+      SERVICE_FILES_URL: http://files:3005
+      SERVICE_CALENDAR_URL: http://calendar:3006
+      SERVICE_NOTIFICATIONS_URL: http://notifications:3007
+      SERVICE_AI_URL: http://ai:3008
+      RATE_LIMIT_TTL_MS: 60000
+      RATE_LIMIT_MAX: 300
+    ports: ['8080:8080']
+    depends_on:
+      - auth
+      - org
+      - chat
+      - projects
+      - files
+      - calendar
+      - notifications
+      - ai
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+        NEXT_PUBLIC_CHAT_WS_URL: ${NEXT_PUBLIC_CHAT_WS_URL:-http://localhost:3003}
+    ports: ['3000:3000']
+    depends_on:
+      - gateway
+
+volumes:
+  pgdata:
+  mongodata:
+  uploads:

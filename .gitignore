@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.next/
+out/
+.turbo/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Uploads & local storage
+uploads/
+*.sqlite
+*.sqlite3
+
+# Test output
+coverage/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Misc
+*.tsbuildinfo
+
+
+node_modules/
+.env
+.env.*
+dist/
+build/

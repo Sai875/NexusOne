@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write # push images to GHCR
+  actions: write # GitHub Actions layer cache for docker builds
+
+env:
+  REGISTRY: ghcr.io
+  # ghcr.io/<owner>/<repo>/backend and /web
+  IMAGE_NAMESPACE: ${{ github.repository }}
+
+jobs:
+  backend:
+    name: Backend — typecheck & tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck all services
+        run: npm run typecheck --workspaces --if-present
+      - name: Unit tests
+        run: npm run test --workspaces --if-present
+      - name: Build all services
+        run: npm run build --workspaces --if-present
+
+  frontend:
+    name: Frontend — typecheck & build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Production build
+        run: npm run build
+
+  docker:
+    name: Build & push images → GHCR
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One shared backend image: every NestJS service runs from it,
+          # the SERVICE env var (default gateway) selects which app starts
+          # (see backend/Dockerfile). No per-service images needed.
+          - name: backend
+            context: ./backend
+            file: ./backend/Dockerfile
+            args: ''
+          # NEXT_PUBLIC_* are inlined into the client bundle at build time,
+          # so they must be build args. Override via repository variables
+          # (Settings → Secrets and variables → Actions) if your URLs differ
+          # from the Render defaults below.
+          - name: web
+            context: ./frontend
+            file: ./frontend/Dockerfile
+            args: |
+              NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL || 'https://nexusone-gateway.onrender.com' }}
+              NEXT_PUBLIC_CHAT_WS_URL=${{ vars.NEXT_PUBLIC_CHAT_WS_URL || 'wss://nexusone-chat.onrender.com' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata (tags)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.name }}
+          tags: |
+            type=ref,event=branch
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build & push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          build-args: ${{ matrix.args }}
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Trigger deployment (Render deploy hook)
+    runs-on: ubuntu-latest
+    needs: docker
+    # Only after images are pushed on main, and only if the owner configured
+    # a hook. Add the secret `RENDER_DEPLOY_HOOK_URL` (Render → service →
+    # Deploy Hook → Copy URL) to enable. The Render Blueprint already
+    # auto-deploys on commit — this hook is for services with auto-deploy
+    # disabled or for hosts that pull the fresh GHCR image.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.RENDER_DEPLOY_HOOK_URL != ''
+    steps:
+      - name: Hit Render deploy hook
+        run: curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}

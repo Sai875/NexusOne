@@ -1,0 +1,13 @@
+{
+  "name": "@nexusone/calendar",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "start:dev": "nest start --watch",
+    "start:prod": "node dist/main.js",
+    "test": "jest --passWithNoTests",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}
